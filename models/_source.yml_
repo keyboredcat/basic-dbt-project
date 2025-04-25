@@ -2,7 +2,7 @@ version: 2
 sources:
     - name: raw
     tables:
-        - name: raw_customers
-          meta:
-            dagster:
-                asset_key: ["raw_customers"]
+      - name: raw_customers
+        meta:
+          dagster:
+              asset_key: ["raw_customers"]

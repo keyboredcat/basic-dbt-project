@@ -5,7 +5,13 @@ from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
 import dagster as dg
 
 import pandas as pd
-from dagster_dbt import DbtCliResource, DbtProject, dbt_assets
+from dagster_dbt import (
+    DbtCliResource,
+    DbtProject,
+    build_schedule_from_dbt_selection,
+    dbt_assets,
+    get_asset_key_for_model
+)
 
 import dagster as dg
 
@@ -44,9 +50,42 @@ dbt_project.prepare_if_dev()
 def dbt_models(context: dg.AssetExecutionContext, dbt: DbtCliResource):
     yield from dbt.cli(["build"], context=context).stream()
 
+@dg_asset(
+    compute_kind="python",
+    # defines the dependency on the customers model, which is represented as an asset in Dagster
+    deps=[get_asset_key_for_model([dbt_models], "customers")]
+)
+
+def customer_histogram(context: dg.AssetExecutionContext):
+    # read the contents of the customers table into a pandas dataframe
+    conn = duckdb.connect(os.fspath(duckdb_database_path))
+    customers = conn.sql("select * from customers").df()
+
+    # create a histogram of the customers table and write it out to an HTML file
+    fig = px.histogram(customers, x="FIRST_NAME")
+    fig.update_layout(bargap=0.2)
+    fig.update_xaxes(categoryorder="total ascending")
+    save_chart_path = Path(duckdb_database_path).parent.joinpath(
+        "order_count_chart.html"
+    )
+    fig.write_html(save_chart_path, auto_open=True)
+
+    # tell Dagster about the location of the HTML file, so it's easy to access from the Dagster UI
+    context.add_output_metadata(
+        {"plot_url": dg.MetadataValue.url("file://" + os.fspath(save_chart_path))}
+    )
+
+# build a schedule for the job that materializes a selection of dbt assets
+dbt_schedule = build_schedule_from_dbt_selection(
+    [dbt_models],
+    job_name="materialize_dbt_models",
+    cron_schedule="0 0 * * *",
+    dbt_select="fqn:*"
+)
 
 # Dagster object that contains the dbt assets and resource
 defs = dg.Definitions(
-    assets=[raw_customers, dbt_models],
-    resources={"dbt": dbt_resource}
+    assets=[raw_customers, dbt_models, customer_histogram], 
+    resources={"dbt": dbt_resource},
+    schedules=[dbt_schedule]
 )
